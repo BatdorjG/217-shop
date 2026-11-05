@@ -11,7 +11,7 @@ CREATE TABLE items (
 -- Banned device footprints
 CREATE TABLE banned_footprints (
     footprint_hash TEXT PRIMARY KEY,
-    reason TEXT NOT NULL DEFAULT 'False order / wrong room',
+    reason TEXT NOT NULL DEFAULT 'Хуурамч захиалга / буруу өрөө',
     banned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

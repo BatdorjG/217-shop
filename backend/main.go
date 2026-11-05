@@ -154,7 +154,7 @@ func (s *Server) isBanned(ctx context.Context, footprint string) bool {
 func (s *Server) handleShopAuth(w http.ResponseWriter, r *http.Request) {
 	footprint := r.Header.Get("X-Device-Footprint")
 	if s.isBanned(r.Context(), footprint) {
-		http.Error(w, "Your device is banned due to a previous false order.", http.StatusForbidden)
+		http.Error(w, "Өмнө нь хуурамч захиалга өгсөн тул таны төхөөрөмжийг блоклосон байна.", http.StatusForbidden)
 		return
 	}
 
@@ -163,7 +163,7 @@ func (s *Server) handleShopAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	if body.MagicWord != s.magicWord {
-		http.Error(w, "Wrong magic word", http.StatusUnauthorized)
+		http.Error(w, "Нууц үг буруу байна.", http.StatusUnauthorized)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -171,12 +171,12 @@ func (s *Server) handleShopAuth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleShopGetItems(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("X-Magic-Word") != s.magicWord {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		http.Error(w, "Нэвтрэх эрхгүй байна.", http.StatusUnauthorized)
 		return
 	}
 	footprint := r.Header.Get("X-Device-Footprint")
 	if s.isBanned(r.Context(), footprint) {
-		http.Error(w, "Device banned", http.StatusForbidden)
+		http.Error(w, "Таны төхөөрөмж блоклогдсон байна.", http.StatusForbidden)
 		return
 	}
 
@@ -200,25 +200,25 @@ func (s *Server) handleShopGetItems(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleShopCreateOrder(w http.ResponseWriter, r *http.Request) {
 	footprint := r.Header.Get("X-Device-Footprint")
 	if footprint == "" {
-		http.Error(w, "Missing device footprint", http.StatusBadRequest)
+		http.Error(w, "Төхөөрөмжийн мэдээлэл олдсонгүй.", http.StatusBadRequest)
 		return
 	}
 	if s.isBanned(r.Context(), footprint) {
-		http.Error(w, "Your device has been banned from ordering.", http.StatusForbidden)
+		http.Error(w, "Таны төхөөрөмж захиалга өгөх эрхгүй (блоклогдсон) байна.", http.StatusForbidden)
 		return
 	}
 
 	var req CreateOrderReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
+		http.Error(w, "Хүсэлт буруу байна.", http.StatusBadRequest)
 		return
 	}
 	if req.MagicWord != s.magicWord {
-		http.Error(w, "Invalid magic word", http.StatusUnauthorized)
+		http.Error(w, "Нууц үг буруу байна.", http.StatusUnauthorized)
 		return
 	}
 	if req.RoomNumber == "" || len(req.Items) == 0 {
-		http.Error(w, "Room number and items required", http.StatusBadRequest)
+		http.Error(w, "Өрөөний дугаар болон бараагаа сонгоно уу.", http.StatusBadRequest)
 		return
 	}
 
@@ -229,7 +229,7 @@ func (s *Server) handleShopCreateOrder(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
-		http.Error(w, "Could not start transaction", 500)
+		http.Error(w, "Системийн алдаа гарлаа.", 500)
 		return
 	}
 	defer tx.Rollback()
@@ -245,19 +245,19 @@ func (s *Server) handleShopCreateOrder(w http.ResponseWriter, r *http.Request) {
 	// Lock each requested item row with FOR UPDATE so concurrent orders never oversell
 	for _, reqIt := range req.Items {
 		if reqIt.Quantity <= 0 {
-			http.Error(w, "Invalid quantity", http.StatusBadRequest)
+			http.Error(w, "Тоо ширхэг буруу байна.", http.StatusBadRequest)
 			return
 		}
 		var price, stock int
 		err := tx.QueryRowContext(ctx, `SELECT price, stock FROM items WHERE id = $1 FOR UPDATE`, reqIt.ItemID).Scan(&price, &stock)
 		if err != nil || stock < reqIt.Quantity {
-			http.Error(w, fmt.Sprintf("Item #%d is out of stock", reqIt.ItemID), http.StatusConflict)
+			http.Error(w, fmt.Sprintf("#%d дугаартай барааны үлдэгдэл хүрэлцэхгүй байна.", reqIt.ItemID), http.StatusConflict)
 			return
 		}
 
 		_, err = tx.ExecContext(ctx, `UPDATE items SET stock = stock - $1 WHERE id = $2`, reqIt.Quantity, reqIt.ItemID)
 		if err != nil {
-			http.Error(w, "Stock update failed", 500)
+			http.Error(w, "Үлдэгдэл шинэчлэхэд алдаа гарлаа.", 500)
 			return
 		}
 
@@ -271,7 +271,7 @@ func (s *Server) handleShopCreateOrder(w http.ResponseWriter, r *http.Request) {
 		VALUES ($1, $2, $3, $4) RETURNING id
 	`, req.RoomNumber, footprint, ipHashHex, totalPrice).Scan(&orderID)
 	if err != nil {
-		http.Error(w, "Order insert failed", 500)
+		http.Error(w, "Захиалга бүртгэхэд алдаа гарлаа.", 500)
 		return
 	}
 
@@ -281,14 +281,14 @@ func (s *Server) handleShopCreateOrder(w http.ResponseWriter, r *http.Request) {
 			VALUES ($1, $2, $3, $4)
 		`, orderID, v.id, v.qty, v.price)
 		if err != nil {
-			http.Error(w, "Order items insert failed", 500)
+			http.Error(w, "Захиалгын бараа бүртгэхэд алдаа гарлаа.", 500)
 			return
 		}
 	}
 
 	// Commit ACID transaction
 	if err := tx.Commit(); err != nil {
-		http.Error(w, "Transaction commit failed", 500)
+		http.Error(w, "Захиалга баталгаажуулахад алдаа гарлаа.", 500)
 		return
 	}
 
@@ -434,7 +434,7 @@ func (s *Server) handleAdminOrderStatus(w http.ResponseWriter, r *http.Request) 
 	err = tx.QueryRowContext(ctx, `SELECT footprint_hash, status, room_number FROM orders WHERE id = $1 FOR UPDATE`, orderID).
 		Scan(&footprint, &oldStatus, &room)
 	if err != nil {
-		http.Error(w, "Order not found", 404)
+		http.Error(w, "Захиалга олдсонгүй", 404)
 		return
 	}
 
@@ -452,7 +452,7 @@ func (s *Server) handleAdminOrderStatus(w http.ResponseWriter, r *http.Request) 
 		_, _ = tx.ExecContext(ctx, `
 			INSERT INTO banned_footprints (footprint_hash, reason)
 			VALUES ($1, $2) ON CONFLICT DO NOTHING
-		`, footprint, "False order to room "+room)
+		`, footprint, room+" тоот руу хуурамч захиалга өгсөн")
 	}
 
 	_ = tx.Commit()

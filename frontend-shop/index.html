@@ -1,13 +1,148 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="mn">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Room Delivery Shop</title>
+  <title>217-Store · Өрөөний дэлгүүр</title>
+  <meta name="description" content="217-Store дотуур байрны өрөөнд хүргэх онлайн дэлгүүр." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Hallmark · checked: 2026-11-06 · genre: modern-minimal · shape: app screen · v2.0.0 */
+    /* critique: Operate-mode mobile store with strict token system, tabular numerals, and floating bottom action bar */
+    :root {
+      --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+      --color-paper: #090d12;
+      --color-paper-2: #111820;
+      --color-paper-3: #1b2430;
+      --color-rule: #263242;
+      --color-ink: #f8fafc;
+      --color-ink-2: #cbd5e1;
+      --color-muted: #94a3b8;
+
+      --color-accent: #10b981;
+      --color-accent-hover: #34d399;
+      --color-accent-ink: #052e16;
+      --color-focus: #34d399;
+
+      --color-danger: #ef4444;
+      --color-danger-paper: #450a0a;
+      --color-danger-ink: #fecaca;
+
+      --color-warn: #f59e0b;
+      --color-warn-paper: #451a03;
+
+      --radius-card: 14px;
+      --radius-control: 10px;
+      --dur-micro: 120ms;
+      --dur-short: 200ms;
+      --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    html, body {
+      overflow-x: clip;
+      background-color: var(--color-paper);
+      color: var(--color-ink);
+      font-family: var(--font-sans);
+      font-size: 16px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    ::selection {
+      background-color: var(--color-accent);
+      color: var(--color-accent-ink);
+    }
+
+    .tabular-nums {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .surface-header {
+      background-color: var(--color-paper);
+      border-bottom: 1px solid var(--color-rule);
+    }
+
+    .surface-card {
+      background-color: var(--color-paper-2);
+      border: 1px solid var(--color-rule);
+      border-radius: var(--radius-card);
+    }
+
+    .surface-well {
+      background-color: var(--color-paper-3);
+      border: 1px solid var(--color-rule);
+      border-radius: var(--radius-control);
+    }
+
+    .btn-primary {
+      background-color: var(--color-accent);
+      color: var(--color-accent-ink);
+      font-weight: 700;
+      border-radius: var(--radius-control);
+      transition: transform var(--dur-micro) var(--ease-out), opacity var(--dur-micro) var(--ease-out), background-color var(--dur-short) var(--ease-out);
+      cursor: pointer;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background-color: var(--color-accent-hover);
+    }
+    .btn-primary:active:not(:disabled) {
+      transform: translateY(1px);
+    }
+    .btn-primary:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background-color: var(--color-paper-3);
+      color: var(--color-ink);
+      border: 1px solid var(--color-rule);
+      border-radius: var(--radius-control);
+      transition: transform var(--dur-micro) var(--ease-out), background-color var(--dur-short) var(--ease-out);
+      cursor: pointer;
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background-color: var(--color-rule);
+    }
+    .btn-secondary:active:not(:disabled) {
+      transform: translateY(1px);
+    }
+
+    .input-field {
+      background-color: var(--color-paper-3);
+      color: var(--color-ink);
+      border: 1px solid var(--color-rule);
+      border-radius: var(--radius-control);
+      font-size: 16px;
+    }
+    .input-field::placeholder {
+      color: var(--color-muted);
+    }
+    .input-field:focus-visible {
+      outline: 2px solid var(--color-focus);
+      outline-offset: -1px;
+    }
+
+    button:focus-visible, a:focus-visible {
+      outline: 2px solid var(--color-focus);
+      outline-offset: 2px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
 </head>
-<body class="bg-zinc-950 text-zinc-100 min-h-screen font-sans">
-  <div id="app" class="max-w-lg mx-auto p-4"></div>
+<body class="min-h-screen flex flex-col">
+  <div id="app" class="w-full max-w-lg mx-auto flex-1 flex flex-col"></div>
   <script type="module" src="/main.js"></script>
 </body>
 </html>

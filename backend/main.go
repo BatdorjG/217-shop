@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -13,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -21,9 +24,13 @@ import (
 )
 
 type Server struct {
-	db        *sql.DB
-	js        jetstream.JetStream
-	magicWord string
+	db         *sql.DB
+	js         jetstream.JetStream
+	magicWord  string
+	tgBotToken string
+	tgChatID   string
+	sseMu      sync.Mutex
+	sseClients map[chan string]struct{}
 }
 
 type Item struct {
@@ -52,6 +59,8 @@ func main() {
 	if magicWord == "" {
 		magicWord = "midnightramen"
 	}
+	tgBotToken := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
+	tgChatID := strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID"))
 
 	// 1. Connect to PostgreSQL
 	db, err := sql.Open("pgx", dbURL)
@@ -89,7 +98,14 @@ func main() {
 		log.Fatalf("Stream creation failed: %v", err)
 	}
 
-	srv := &Server{db: db, js: js, magicWord: magicWord}
+	srv := &Server{
+		db:         db,
+		js:         js,
+		magicWord:  magicWord,
+		tgBotToken: tgBotToken,
+		tgChatID:   tgChatID,
+		sseClients: make(map[chan string]struct{}),
+	}
 
 	// Start Background JetStream Consumer Worker
 	go srv.startJetStreamWorker(ctx)
@@ -107,6 +123,7 @@ func main() {
 	// ADMIN ROUTER (:9090 - Reached via frontend-admin on Tailscale)
 	// ==========================================
 	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("GET /api/admin/events", srv.handleAdminEvents)
 	adminMux.HandleFunc("GET /api/admin/items", srv.handleAdminGetItems)
 	adminMux.HandleFunc("POST /api/admin/items", srv.handleAdminAddItem)
 	adminMux.HandleFunc("PATCH /api/admin/items/{id}", srv.handleAdminUpdateItem)
@@ -137,11 +154,119 @@ func (s *Server) startJetStreamWorker(ctx context.Context) {
 	}
 
 	_, err = cons.Consume(func(msg jetstream.Msg) {
-		log.Printf("[NATS JETSTREAM] Event on %s: %s", msg.Subject(), string(msg.Data()))
+		payload := string(msg.Data())
+		log.Printf("[NATS JETSTREAM] Event on %s: %s", msg.Subject(), payload)
+
+		if msg.Subject() == "shop.orders.created" {
+			s.broadcastAdminEvent(payload)
+			go s.sendTelegramOrderAlert(payload)
+		}
+
 		_ = msg.Ack()
 	})
 	if err != nil {
 		log.Printf("Consume error: %v", err)
+	}
+}
+
+func (s *Server) broadcastAdminEvent(payload string) {
+	s.sseMu.Lock()
+	defer s.sseMu.Unlock()
+	for ch := range s.sseClients {
+		select {
+		case ch <- payload:
+		default:
+		}
+	}
+}
+
+func (s *Server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ch := make(chan string, 8)
+	s.sseMu.Lock()
+	s.sseClients[ch] = struct{}{}
+	s.sseMu.Unlock()
+
+	defer func() {
+		s.sseMu.Lock()
+		delete(s.sseClients, ch)
+		s.sseMu.Unlock()
+	}()
+
+	// Initial comment to establish stream immediately
+	fmt.Fprintf(w, ": connected\n\n")
+	flusher.Flush()
+
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case msg := <-ch:
+			fmt.Fprintf(w, "event: order_created\ndata: %s\n\n", msg)
+			flusher.Flush()
+		case <-ticker.C:
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *Server) sendTelegramOrderAlert(payload string) {
+	if s.tgBotToken == "" || s.tgChatID == "" {
+		return
+	}
+
+	var ev struct {
+		OrderID    int      `json:"order_id"`
+		RoomNumber string   `json:"room_number"`
+		TotalPrice int      `json:"total_price"`
+		Footprint  string   `json:"footprint"`
+		Items      []string `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+		return
+	}
+
+	itemsText := strings.Join(ev.Items, "\n• ")
+	if itemsText != "" {
+		itemsText = "• " + itemsText
+	}
+
+	text := fmt.Sprintf(
+		"🔔 *217-Store · Шинэ захиалга (#%d)*\n\n🚪 *Өрөө:* %s тоот\n📦 *Бараа:*\n%s\n💰 *Нийт дүн:* %d₮\n📱 *Төхөөрөмж:* `%s`",
+		ev.OrderID, ev.RoomNumber, itemsText, ev.TotalPrice, ev.Footprint,
+	)
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", s.tgBotToken)
+	reqBody, _ := json.Marshal(map[string]any{
+		"chat_id":    s.tgChatID,
+		"text":       text,
+		"parse_mode": "Markdown",
+	})
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Post(apiURL, "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		log.Printf("[TELEGRAM] Error sending message: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("[TELEGRAM] Non-200 status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 }
 
@@ -237,10 +362,12 @@ func (s *Server) handleShopCreateOrder(w http.ResponseWriter, r *http.Request) {
 	totalPrice := 0
 	type verifiedItem struct {
 		id    int
+		name  string
 		price int
 		qty   int
 	}
 	var verified []verifiedItem
+	var itemSummaries []string
 
 	// Lock each requested item row with FOR UPDATE so concurrent orders never oversell
 	for _, reqIt := range req.Items {
@@ -248,8 +375,9 @@ func (s *Server) handleShopCreateOrder(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Тоо ширхэг буруу байна.", http.StatusBadRequest)
 			return
 		}
+		var name string
 		var price, stock int
-		err := tx.QueryRowContext(ctx, `SELECT price, stock FROM items WHERE id = $1 FOR UPDATE`, reqIt.ItemID).Scan(&price, &stock)
+		err := tx.QueryRowContext(ctx, `SELECT name, price, stock FROM items WHERE id = $1 FOR UPDATE`, reqIt.ItemID).Scan(&name, &price, &stock)
 		if err != nil || stock < reqIt.Quantity {
 			http.Error(w, fmt.Sprintf("#%d дугаартай барааны үлдэгдэл хүрэлцэхгүй байна.", reqIt.ItemID), http.StatusConflict)
 			return
@@ -262,7 +390,8 @@ func (s *Server) handleShopCreateOrder(w http.ResponseWriter, r *http.Request) {
 		}
 
 		totalPrice += price * reqIt.Quantity
-		verified = append(verified, verifiedItem{id: reqIt.ItemID, price: price, qty: reqIt.Quantity})
+		verified = append(verified, verifiedItem{id: reqIt.ItemID, name: name, price: price, qty: reqIt.Quantity})
+		itemSummaries = append(itemSummaries, fmt.Sprintf("%d× %s", reqIt.Quantity, name))
 	}
 
 	var orderID int
@@ -298,6 +427,7 @@ func (s *Server) handleShopCreateOrder(w http.ResponseWriter, r *http.Request) {
 		"room_number": req.RoomNumber,
 		"total_price": totalPrice,
 		"footprint":   footprint,
+		"items":       itemSummaries,
 	})
 	_, _ = s.js.Publish(ctx, "shop.orders.created", eventData)
 

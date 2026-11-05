@@ -3,11 +3,16 @@ let items = [];
 let orders = [];
 let bans = [];
 let notice = null;
+let audioCtx = null;
+let soundEnabled = localStorage.getItem('admin_sound_enabled') !== 'false';
+let sseConnected = false;
 
 const ICONS = {
   shield: `<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>`,
   refresh: `<svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>`,
   bell: `<svg class="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>`,
+  volumeOn: `<svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`,
+  volumeOff: `<svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>`,
   plus: `<svg class="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`,
   box: `<svg class="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>`,
   ban: `<svg class="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>`,
@@ -29,6 +34,97 @@ const STATUS_LABELS = {
   }
 };
 
+function ensureAudioContext() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!audioCtx) {
+      audioCtx = new AudioCtx();
+    }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+    return audioCtx;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Unlock Web Audio on first user tap anywhere on the page
+window.addEventListener('pointerdown', () => {
+  if (soundEnabled) ensureAudioContext();
+}, { once: true });
+
+// Two-tone doorbell chime synthesized via Web Audio API (no external MP3 needed)
+function playOrderChime() {
+  if (!soundEnabled) return;
+  const ctx = ensureAudioContext();
+  if (!ctx) return;
+
+  const now = ctx.currentTime;
+  const notes = [
+    { freq: 659.25, start: 0, dur: 0.18 },    // E5
+    { freq: 880.00, start: 0.16, dur: 0.35 }  // A5
+  ];
+
+  notes.forEach(({ freq, start, dur }) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, now + start);
+
+    gain.gain.setValueAtTime(0.0001, now + start);
+    gain.gain.exponentialRampToValueAtTime(0.28, now + start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now + start);
+    osc.stop(now + start + dur + 0.02);
+  });
+}
+
+function triggerBrowserNotification(ev) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    const itemsLine = Array.isArray(ev.items) && ev.items.length > 0 ? ev.items.join(', ') : '';
+    const body = `${ev.room_number} тоот · ${formatPrice(ev.total_price)}${itemsLine ? `\n${itemsLine}` : ''}`;
+    new Notification(`217-Store · Шинэ захиалга (#${ev.order_id})`, {
+      body,
+      tag: `order-${ev.order_id}`,
+      renotify: true
+    });
+  } catch (_) {}
+}
+
+function connectLiveOrderStream() {
+  if (!('EventSource' in window)) return;
+  const es = new EventSource('/api/admin/events');
+
+  es.onopen = () => {
+    sseConnected = true;
+  };
+
+  es.addEventListener('order_created', async (e) => {
+    try {
+      const ev = JSON.parse(e.data);
+      playOrderChime();
+      triggerBrowserNotification(ev);
+      notice = {
+        type: 'success',
+        text: `Шинэ захиалга ирлээ: ${ev.room_number} тоот (${formatPrice(ev.total_price)})`
+      };
+      await loadAll();
+    } catch (_) {
+      await loadAll();
+    }
+  });
+
+  es.onerror = () => {
+    sseConnected = false;
+  };
+}
+
 async function loadAll() {
   try {
     const [iRes, oRes, bRes] = await Promise.all([
@@ -47,10 +143,12 @@ async function loadAll() {
 
 function render() {
   const pendingCount = orders.filter((o) => o.status === 'pending').length;
+  const notifSupported = 'Notification' in window;
+  const notifPerm = notifSupported ? Notification.permission : 'unsupported';
 
   app.innerHTML = `
     <header class="sticky top-0 z-30 surface-header mb-5">
-      <div class="px-4 py-3 flex items-center justify-between gap-3">
+      <div class="px-4 py-3 flex items-center justify-between gap-2">
         <div class="flex items-center gap-2.5 min-w-0">
           <div class="w-10 h-10 rounded-xl bg-[var(--color-paper-3)] border border-[var(--color-rule)] flex items-center justify-center text-[var(--color-accent)] shrink-0">
             ${ICONS.shield}
@@ -64,10 +162,33 @@ function render() {
             </p>
           </div>
         </div>
-        <button type="button" id="refreshBtn" class="btn-secondary px-3.5 h-10 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap">
-          ${ICONS.refresh}
-          <span>Шинэчлэх</span>
-        </button>
+
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button type="button" id="toggleSoundBtn"
+            aria-label="${soundEnabled ? 'Дуут дохио унтраах' : 'Дуут дохио асаах'}"
+            title="${soundEnabled ? 'Дуут дохио асаалттай (дарж унтраах)' : 'Дуут дохио унтарсан (дарж асаах)'}"
+            class="btn-secondary px-2.5 h-10 text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap ${
+              soundEnabled ? 'text-[var(--color-accent)] border-[var(--color-accent)]' : 'text-[var(--color-muted)]'
+            }">
+            ${soundEnabled ? ICONS.volumeOn : ICONS.volumeOff}
+            <span class="hidden sm:inline">${soundEnabled ? 'Дуу: Асаалттай' : 'Дуу: Унтарсан'}</span>
+          </button>
+
+          ${
+            notifSupported && notifPerm !== 'granted'
+              ? `<button type="button" id="enableNotifBtn"
+                  class="btn-secondary px-2.5 h-10 text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap text-[var(--color-ink)]">
+                  ${ICONS.bell}
+                  <span>Мэдэгдэл</span>
+                </button>`
+              : ''
+          }
+
+          <button type="button" id="refreshBtn" class="btn-secondary px-3 h-10 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap">
+            ${ICONS.refresh}
+            <span>Шинэчлэх</span>
+          </button>
+        </div>
       </div>
     </header>
 
@@ -270,6 +391,31 @@ function render() {
 
   document.getElementById('refreshBtn').onclick = loadAll;
 
+  const toggleSoundBtn = document.getElementById('toggleSoundBtn');
+  if (toggleSoundBtn) {
+    toggleSoundBtn.onclick = () => {
+      soundEnabled = !soundEnabled;
+      localStorage.setItem('admin_sound_enabled', String(soundEnabled));
+      if (soundEnabled) {
+        playOrderChime();
+      }
+      render();
+    };
+  }
+
+  const enableNotifBtn = document.getElementById('enableNotifBtn');
+  if (enableNotifBtn) {
+    enableNotifBtn.onclick = async () => {
+      const perm = await Notification.requestPermission();
+      if (perm === 'granted') {
+        notice = { type: 'success', text: 'Хөтөчийн мэдэгдэл идэвхэжлээ.' };
+      } else {
+        notice = { type: 'error', text: 'Мэдэгдэл илгээх зөвшөөрөл татгалзсан байна.' };
+      }
+      render();
+    };
+  }
+
   const dismissNoticeBtn = document.getElementById('dismissNoticeBtn');
   if (dismissNoticeBtn) {
     dismissNoticeBtn.onclick = () => {
@@ -376,3 +522,4 @@ function escapeAttr(str) {
 }
 
 loadAll();
+connectLiveOrderStream();

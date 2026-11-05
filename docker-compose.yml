@@ -34,6 +34,8 @@ services:
       DATABASE_URL: postgres://shopuser:${DB_PASSWORD:-supersecretdbpass}@postgres:5432/shopdb?sslmode=disable
       NATS_URL: nats://nats:4222
       MAGIC_WORD: ${MAGIC_WORD:-midnightramen}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       - uploads_data:/app/uploads
     depends_on:

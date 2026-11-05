@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shopuser
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-supersecretdbpass}
+      POSTGRES_DB: shopdb
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - internal_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopuser -d shopdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # NATS JetStream (Strictly internal, ~15MB RAM, persistent disk storage)
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    volumes:
+      - natsdata:/data
+    networks:
+      - internal_net
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://shopuser:${DB_PASSWORD:-supersecretdbpass}@postgres:5432/shopdb?sslmode=disable
+      NATS_URL: nats://nats:4222
+      MAGIC_WORD: ${MAGIC_WORD:-midnightramen}
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    networks:
+      - internal_net
+
+  frontend-shop:
+    build: ./frontend-shop
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - internal_net
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
+    depends_on:
+      - frontend-shop
+    networks:
+      - internal_net
+
+  frontend-admin:
+    build: ./frontend-admin
+    restart: unless-stopped
+    ports:
+      - "${TAILSCALE_IP:-127.0.0.1}:9090:80"
+    depends_on:
+      - backend
+    networks:
+      - internal_net
+
+networks:
+  internal_net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  natsdata:
+  uploads_data:
